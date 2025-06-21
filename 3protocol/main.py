@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from gmqtt import Client as MQTTClient
 import os
 
-# Fix asyncio bug on Windows
+# Fix asyncio policy for Windows
 if os.name == 'nt':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -13,7 +13,9 @@ if os.name == 'nt':
 def tcp_server():
     HOST = '0.0.0.0'
     PORT = 8888
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Cho phép reuse port
+    try:
         s.bind((HOST, PORT))
         s.listen()
         print(f"[TCP] Listening on port {PORT}...")
@@ -21,6 +23,8 @@ def tcp_server():
             conn, addr = s.accept()
             print(f"[TCP] Connected from {addr}")
             threading.Thread(target=handle_tcp_client, args=(conn, addr), daemon=True).start()
+    except OSError as e:
+        print(f"[TCP] Port {PORT} error: {e}")
 
 def handle_tcp_client(conn, addr):
     with conn:
@@ -47,9 +51,14 @@ class SimpleHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"POST OK")
 
 def http_server():
-    server = HTTPServer(('0.0.0.0', 5000), SimpleHandler)
-    print("[HTTP] Listening on port 5000...")
-    server.serve_forever()
+    HOST, PORT = '0.0.0.0', 5000
+    try:
+        HTTPServer.allow_reuse_address = True  # Cho phép reuse port
+        server = HTTPServer((HOST, PORT), SimpleHandler)
+        print(f"[HTTP] Listening on port {PORT}...")
+        server.serve_forever()
+    except OSError as e:
+        print(f"[HTTP] Port {PORT} error: {e}")
 
 # ========== MQTT SUBSCRIBER ==========
 TOPIC = 'test/topic'
@@ -65,8 +74,11 @@ async def mqtt_subscriber():
     client = MQTTClient("python-subscriber")
     client.on_connect = on_connect
     client.on_message = on_message
-    await client.connect('localhost')  # Đổi IP nếu broker không chạy local
-    await asyncio.Future()  # Giữ kết nối vĩnh viễn
+    try:
+        await client.connect('localhost')  # Đổi IP nếu cần
+    except Exception as e:
+        print(f"[MQTT] Connection error: {e}")
+    await asyncio.Future()
 
 # ========== MAIN ==========
 def start_tcp_server():
