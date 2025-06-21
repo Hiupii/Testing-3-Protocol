@@ -2,8 +2,12 @@ import asyncio
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from hbmqtt.broker import Broker
-from hbmqtt.client import MQTTClient
+from gmqtt import Client as MQTTClient
+import os
+
+# Fix asyncio bug on Windows
+if os.name == 'nt':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # ========== TCP SERVER ==========
 def tcp_server():
@@ -15,7 +19,7 @@ def tcp_server():
         print(f"[TCP] Listening on port {PORT}...")
         while True:
             conn, addr = s.accept()
-            print(f"[TCP] Connection from {addr}")
+            print(f"[TCP] Connected from {addr}")
             threading.Thread(target=handle_tcp_client, args=(conn, addr), daemon=True).start()
 
 def handle_tcp_client(conn, addr):
@@ -47,33 +51,22 @@ def http_server():
     print("[HTTP] Listening on port 5000...")
     server.serve_forever()
 
-# ========== MQTT SERVER ==========
-broker_config = {
-    'listeners': {
-        'default': {
-            'type': 'tcp',
-            'bind': '0.0.0.0:1883',
-        }
-    },
-    'sys_interval': 10,
-    'auth': {
-        'allow-anonymous': True
-    }
-}
+# ========== MQTT SUBSCRIBER ==========
+TOPIC = 'test/topic'
 
-async def mqtt_broker():
-    broker = Broker(broker_config)
-    await broker.start()
+def on_connect(client, flags, rc, properties):
+    print('[MQTT] Connected')
+    client.subscribe(TOPIC)
+
+def on_message(client, topic, payload, qos, properties):
+    print(f'[MQTT] Received on {topic}: {payload.decode()}')
 
 async def mqtt_subscriber():
-    client = MQTTClient()
-    await client.connect('mqtt://localhost:1883/')
-    await client.subscribe([('test/topic', 0)])
-    print("[MQTT] Subscribed to 'test/topic'")
-    while True:
-        message = await client.deliver_message()
-        payload = message.publish_packet.payload.data.decode()
-        print(f"[MQTT] Received: {payload}")
+    client = MQTTClient("python-subscriber")
+    client.on_connect = on_connect
+    client.on_message = on_message
+    await client.connect('localhost')  # Đổi IP nếu broker không chạy local
+    await asyncio.Future()  # Giữ kết nối vĩnh viễn
 
 # ========== MAIN ==========
 def start_tcp_server():
@@ -82,10 +75,10 @@ def start_tcp_server():
 def start_http_server():
     threading.Thread(target=http_server, daemon=True).start()
 
-def start_mqtt_servers():
-    asyncio.run(asyncio.gather(mqtt_broker(), mqtt_subscriber()))
-
-if __name__ == "__main__":
+def start_all():
     start_tcp_server()
     start_http_server()
-    start_mqtt_servers()
+    asyncio.run(mqtt_subscriber())
+
+if __name__ == '__main__':
+    start_all()
